@@ -1,0 +1,8 @@
+name: surfchar
+channels:
+  - conda-forge
+dependencies:
+  - gdal
+  - python
+  - pip:
+    - overflow-hydro==0.3.4
