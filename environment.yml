@@ -2,7 +2,8 @@ name: surfchar
 channels:
   - conda-forge
 dependencies:
-  - gdal
-  - python
+  - python=3.12
+  - gdal=3.12
+  - numpy=1.26
   - pip:
     - overflow-hydro==0.3.4
