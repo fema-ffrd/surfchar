@@ -1,0 +1,27 @@
+[project]
+name = "surfchar"
+version = "0.1.0"
+description = "Surface Characterization for Hydraulic Flood Modeling"
+authors = [
+  { name = "Thomas Williams" }
+]
+dependencies = [
+    "overflow-hydro",
+]
+
+[project.scripts]
+surfchar = "surfchar.cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = "src"
+testpaths = "tests"
+
+[tool.ruff.lint]
+select = ["D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]
+"docs/**" = ["D"]

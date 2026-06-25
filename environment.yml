@@ -6,5 +6,6 @@ dependencies:
   - gdal=3.12
   - numpy=1.26
   - ruff
+  - pytest
   - pip:
-    - overflow-hydro==0.3.5
+    - overflow-hydro
