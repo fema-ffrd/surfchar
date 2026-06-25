@@ -58,3 +58,56 @@ def raster_sizes_match(raster_paths: List[str]) -> bool:
         if not _compare_raster_dimensions(raster_paths[i], raster_paths[i + 1]):
             return False
     return True
+
+
+def label_sinks(sink_depths_path: str, labeled_sinks_path: str) -> int:
+    """
+    Label sink regions in the sink depths raster.
+
+    Parameters
+    ----------
+    sink_depths_path : str
+        Path to the sink depths raster file.
+    labeled_sinks_path : str
+        Path to the output labeled sinks raster file.
+
+    Returns
+    -------
+    int: Number of unique sink regions found.
+    """
+    ds = gdal.Open(sink_depths_path)
+    if ds is None:
+        raise ValueError(f"Could not open sink depths raster: {sink_depths_path}")
+
+    band = ds.GetRasterBand(1)
+    arr = band.ReadAsArray()
+
+    nodata = band.GetNoDataValue()
+
+    # Build binary mask: positive sink depths are foreground, everything else background
+    mask = arr > 0
+    if nodata is not None:
+        mask = mask & (arr != nodata)
+
+    # 8-connectivity: center pixel plus all 8 neighbors
+    structure = np.ones((3, 3), dtype=np.uint8)
+
+    labeled, num_features = ndimage.label(mask, structure=structure)
+
+    driver = gdal.GetDriverByName("GTiff")
+    out_ds = driver.Create(
+        labeled_sinks_path, ds.RasterXSize, ds.RasterYSize, 1, gdal.GDT_Int32
+    )
+
+    out_ds.SetGeoTransform(ds.GetGeoTransform())
+    out_ds.SetProjection(ds.GetProjection())
+
+    out_band = out_ds.GetRasterBand(1)
+    out_band.WriteArray(labeled.astype(np.int32))
+    out_band.SetNoDataValue(0)  # background = 0
+    out_band.FlushCache()
+
+    out_ds = None
+    ds = None
+
+    return num_features

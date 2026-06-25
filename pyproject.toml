@@ -16,6 +16,9 @@ surfchar = "surfchar.cli:main"
 pythonpath = "src"
 testpaths = "tests"
 
+[tool.ruff]
+exclude = ["original"]
+
 [tool.ruff.lint]
 select = ["D"]
 
