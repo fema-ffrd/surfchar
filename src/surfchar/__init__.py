@@ -119,3 +119,102 @@ def surfchar(
     sinks_df = sinks.filter_sinks_df(sinks_df, options)
     logger.info(f"{len(sinks_df)} sinks remaining after filtering.")
     logger.info(sinks_df.head())
+    
+    logger.info("Mapping filtered sinks...")
+
+    filtered_sinks_path = os.path.join(interim_outputs_dir, "sinks.tif")
+
+    raster.filter_sinks_raster(
+        labeled_sinks_path=labeled_sinks_path,
+        filtered_sinks_path=filtered_sinks_path,
+        sink_ids=sinks_df["id"],
+    )
+    
+    logger.info("Finding sink outlets...")
+    logger.info('Getting outlet coordinates...')
+    sinks_df["outlet_rc"] = raster.get_outlet_coords(
+        labeled_sinks_path,
+        flow_accumulation_path,
+        sinks_df,
+    )
+    ds = gdal.Open(hydro_enforced_dem)
+
+    gt = ds.GetGeoTransform()
+
+    x_min = gt[0]
+    y_max = gt[3]
+    cell_width = gt[1]
+    cell_height = abs(gt[5])
+
+    ds = None
+    sinks_df["outlet_xy"] = sinks_df["outlet_rc"].apply(
+    raster.row_col_to_x_y,
+    args=(
+        x_min,
+        y_max,
+        cell_width,
+        cell_height,
+    ),
+)
+    
+    outlets_shapefile_path = os.path.join(interim_outputs_dir, "outlets.shp")
+
+    logger.info(f"Writing outlet points shapefile ({outlets_shapefile_path})...")
+
+    raster.write_outlets_shapefile(
+        sinks_df=sinks_df,
+        shapefile_path=outlets_shapefile_path,
+        template_raster_path=hydro_enforced_dem,
+        sink_id_field="sink_id",
+    )
+    
+    logger.info('Running watersheds...')
+    watersheds_path = os.path.join(
+        interim_outputs_dir,
+        "watersheds.tif"
+    )
+
+    # Overflow bug here
+    overflow.basins(
+        fdr_path=flow_direction_path,
+        drainage_points_path=outlets_shapefile_path,
+        output_path=watersheds_path,
+    )
+    
+    # watersheds_filled_polygons_buffer = None
+
+    # if options.analyze_stage_storage:
+    #     logger.info("Extracting watershed DEMs for rainfall volume analysis...")
+
+    #     watershed_dems = raster.get_watershed_dems(
+    #         hydro_dem_path=hydro_enforced_dem,
+    #         watersheds_path=watersheds_path,
+    #         sink_ids=sinks_df["id"],
+    #     )
+
+    #     logger.info("Calculating watershed fill elevations...")
+
+    #     fill_elevs = raster.get_watershed_fill_elevs(
+    #         watershed_dems=watershed_dems,
+    #         sinks_df=sinks_df,
+    #         rainfall_ft=options.excess_rainfall / 12.0,
+    #         cell_area=cell_area,
+    #     )
+
+    #     sinks_df["fill_elev"] = fill_elevs
+
+    #     logger.info("Mapping watershed fill elevations...")
+
+    #     watersheds_filled_path = os.path.join(
+    #         interim_outputs_dir,
+    #         "watersheds_filled.tif",
+    #     )
+
+    #     raster.map_watershed_fill_raster(
+    #         watersheds_path=watersheds_path,
+    #         hydro_dem_path=hydro_enforced_dem,
+    #         sinks_df=sinks_df,
+    #         output_path=watersheds_filled_path,
+    #     )
+
+
