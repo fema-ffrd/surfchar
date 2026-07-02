@@ -9,7 +9,9 @@ import os
 # import xarray as xr
 from typing import Tuple
 from scipy.optimize import minimize_scalar
-
+import geopandas as gpd
+from shapely.geometry import Point, LineString, MultiLineString
+from shapely.ops import unary_union, linemerge
 
 
 def get_sink_depths(filled_path: str, hydro_dem_path: str, output_path) -> None:
@@ -377,57 +379,14 @@ def row_col_to_x_y(row_col: Tuple[int, int], x_min: float, y_max: float, cell_wi
     y = y_max - dy
     return x, y
 
-def write_outlets_shapefile(
+def write_outlets_gpkg(
     sinks_df: pd.DataFrame,
-    shapefile_path: str,
+    gpkg_path: str,
     template_raster_path: str,
     sink_id_field: str = "sink_id",
 ) -> None:
-    """
-    Write sink outlet points to a shapefile using GDAL/OGR.
 
-    Parameters
-    ----------
-    sinks_df : pd.DataFrame
-        DataFrame containing outlet_xy and id columns.
-    shapefile_path : str
-        Output shapefile path.
-    template_raster_path : str
-        Raster used to copy projection.
-    sink_id_field : str
-        Field name for sink ID.
-    """
-
-    template_ds = gdal.Open(template_raster_path)
-    if template_ds is None:
-        raise ValueError(f"Could not open template raster: {template_raster_path}")
-
-    projection_wkt = template_ds.GetProjection()
-    template_ds = None
-
-    spatial_ref = osr.SpatialReference()
-    if projection_wkt:
-        spatial_ref.ImportFromWkt(projection_wkt)
-
-    driver = ogr.GetDriverByName("ESRI Shapefile")
-
-    if os.path.exists(shapefile_path):
-        driver.DeleteDataSource(shapefile_path)
-
-    out_ds = driver.CreateDataSource(shapefile_path)
-    if out_ds is None:
-        raise ValueError(f"Could not create shapefile: {shapefile_path}")
-
-    layer = out_ds.CreateLayer(
-        os.path.splitext(os.path.basename(shapefile_path))[0],
-        spatial_ref,
-        ogr.wkbPoint,
-    )
-
-    id_field = ogr.FieldDefn(sink_id_field, ogr.OFTInteger)
-    layer.CreateField(id_field)
-
-    layer_defn = layer.GetLayerDefn()
+    rows = []
 
     for sink in sinks_df.itertuples():
         if sink.outlet_xy is None:
@@ -435,24 +394,107 @@ def write_outlets_shapefile(
 
         x, y = sink.outlet_xy
 
-        point = ogr.Geometry(ogr.wkbPoint)
-        point.AddPoint(float(x), float(y))
+        rows.append(
+            {
+                sink_id_field: int(sink.id),
+                "geometry": Point(x, y),
+            }
+        )
 
-        feature = ogr.Feature(layer_defn)
-        feature.SetGeometry(point)
-        feature.SetField(sink_id_field, int(sink.id))
+    template_ds = gdal.Open(template_raster_path)
+    wkt = template_ds.GetProjection()
+    template_ds = None
 
-        layer.CreateFeature(feature)
+    gdf = gpd.GeoDataFrame(
+        rows,
+        geometry="geometry",
+    )
 
-        feature = None
-        point = None
+    gdf.set_crs(wkt, inplace=True)
 
-    out_ds = None
+    gdf.to_file(
+        gpkg_path,
+        driver="GPKG",
+        layer="outlets",
+    )
+    
+# In case someday we need shapefile
+# def write_outlets_shapefile(
+#     sinks_df: pd.DataFrame,
+#     shapefile_path: str,
+#     template_raster_path: str,
+#     sink_id_field: str = "sink_id",
+# ) -> None:
+#     """
+#     Write sink outlet points to a shapefile using GDAL/OGR.
+
+#     Parameters
+#     ----------
+#     sinks_df : pd.DataFrame
+#         DataFrame containing outlet_xy and id columns.
+#     shapefile_path : str
+#         Output shapefile path.
+#     template_raster_path : str
+#         Raster used to copy projection.
+#     sink_id_field : str
+#         Field name for sink ID.
+#     """
+
+#     template_ds = gdal.Open(template_raster_path)
+#     if template_ds is None:
+#         raise ValueError(f"Could not open template raster: {template_raster_path}")
+
+#     projection_wkt = template_ds.GetProjection()
+#     template_ds = None
+
+#     spatial_ref = osr.SpatialReference()
+#     if projection_wkt:
+#         spatial_ref.ImportFromWkt(projection_wkt)
+
+#     driver = ogr.GetDriverByName("ESRI Shapefile")
+
+#     if os.path.exists(shapefile_path):
+#         driver.DeleteDataSource(shapefile_path)
+
+#     out_ds = driver.CreateDataSource(shapefile_path)
+#     if out_ds is None:
+#         raise ValueError(f"Could not create shapefile: {shapefile_path}")
+
+#     layer = out_ds.CreateLayer(
+#         os.path.splitext(os.path.basename(shapefile_path))[0],
+#         spatial_ref,
+#         ogr.wkbPoint,
+#     )
+
+#     id_field = ogr.FieldDefn(sink_id_field, ogr.OFTInteger)
+#     layer.CreateField(id_field)
+
+#     layer_defn = layer.GetLayerDefn()
+
+#     for sink in sinks_df.itertuples():
+#         if sink.outlet_xy is None:
+#             continue
+
+#         x, y = sink.outlet_xy
+
+#         point = ogr.Geometry(ogr.wkbPoint)
+#         point.AddPoint(float(x), float(y))
+
+#         feature = ogr.Feature(layer_defn)
+#         feature.SetGeometry(point)
+#         feature.SetField(sink_id_field, int(sink.id))
+
+#         layer.CreateFeature(feature)
+
+#         feature = None
+#         point = None
+
+#     out_ds = None
     
 def get_watershed_dems(
-hydro_dem_path: str,
-watersheds_path: str,
-sink_ids: pd.Series,
+    hydro_dem_path: str,
+    watersheds_path: str,
+    sink_ids: pd.Series,
 ) -> list[np.ndarray]:
     """
     Extract DEM values for each sink watershed.
@@ -622,4 +664,278 @@ def map_watershed_fill_raster(
     out_ds = None
     watersheds_ds = None
     hydro_ds = None
+    
+def raster_to_polygons(
+    raster_path: str,
+    output_path: str,
+) -> None:
 
+    src_ds = gdal.Open(raster_path)
+    band = src_ds.GetRasterBand(1)
+
+    ext = os.path.splitext(output_path)[1].lower()
+
+    if ext == ".shp":
+        driver_name = "ESRI Shapefile"
+    elif ext == ".gpkg":
+        driver_name = "GPKG"
+    else:
+        raise ValueError(f"Unsupported output format: {ext}")
+
+    driver = ogr.GetDriverByName(driver_name)
+
+    if os.path.exists(output_path):
+        driver.DeleteDataSource(output_path)
+
+    out_ds = driver.CreateDataSource(output_path)
+
+    srs = osr.SpatialReference()
+    srs.ImportFromWkt(src_ds.GetProjection())
+
+    layer_name = os.path.splitext(os.path.basename(output_path))[0]
+
+    layer = out_ds.CreateLayer(
+        layer_name,
+        srs=srs,
+        geom_type=ogr.wkbMultiPolygon,
+    )
+
+    field_defn = ogr.FieldDefn("gridcode", ogr.OFTInteger)
+    layer.CreateField(field_defn)
+
+    gdal.Polygonize(
+        band,
+        None,
+        layer,
+        0,
+        [],
+    )
+
+    out_ds = None
+    src_ds = None
+
+def buffer_polygons(
+    input_path: str,
+    output_path: str,
+    distance: float,
+) -> None:
+
+    gdf = gpd.read_file(input_path)
+
+    gdf["geometry"] = gdf.buffer(distance)
+
+    ext = os.path.splitext(output_path)[1].lower()
+
+    if ext == ".shp":
+        driver = "ESRI Shapefile"
+
+        base = os.path.splitext(output_path)[0]
+        for sidecar_ext in [".shp", ".shx", ".dbf", ".prj", ".cpg"]:
+            sidecar = base + sidecar_ext
+            if os.path.exists(sidecar):
+                os.remove(sidecar)
+
+    elif ext == ".gpkg":
+        driver = "GPKG"
+
+        if os.path.exists(output_path):
+            os.remove(output_path)
+
+    else:
+        raise ValueError(f"Unsupported output format: {ext}")
+
+    gdf.to_file(
+        output_path,
+        driver=driver,
+    )
+    
+def polygons_to_lines(
+    input_path: str,
+    output_path: str,
+) -> None:
+
+    gdf = gpd.read_file(input_path)
+
+    lines = gdf.boundary
+
+    out_gdf = gpd.GeoDataFrame(
+        gdf.drop(columns="geometry"),
+        geometry=lines,
+        crs=gdf.crs,
+    )
+
+    out_gdf.to_file(
+        output_path,
+        driver="ESRI Shapefile",
+    )
+
+
+def clip_watersheds(
+    watersheds: str,
+    sinks_buffer: str,
+    sinks_that_overflow: pd.Series,
+    watersheds_clipped: str,
+    watersheds_fill_buffer: str = None,
+    clip_all: bool = False,
+    min_breakline_length: float = 200.0,
+):
+
+    watersheds_gdf = gpd.read_file(watersheds)
+    sinks_buffer_gdf = gpd.read_file(sinks_buffer)
+
+    # use gridcode as lookup key
+    buffer_lookup = (
+        sinks_buffer_gdf
+        .set_index("gridcode")
+        .geometry
+        .to_dict()
+    )
+
+    # replace with larger fill buffer if available
+    if watersheds_fill_buffer:
+        fill_buffer_gdf = gpd.read_file(watersheds_fill_buffer)
+
+        for row in fill_buffer_gdf.itertuples():
+            sink_id = row.gridcode
+
+            if sink_id not in buffer_lookup:
+                continue
+
+            if row.geometry.area > buffer_lookup[sink_id].area:
+                buffer_lookup[sink_id] = row.geometry
+
+    output_rows = []
+
+    overflow_ids = set(sinks_that_overflow)
+
+    for row in watersheds_gdf.itertuples():
+
+        watershed_id = row.gridcode
+        watershed_line = row.geometry
+
+        # not clipped
+        if not clip_all and watershed_id not in overflow_ids:
+            output_rows.append(
+                {
+                    "gridcode": watershed_id,
+                    "geometry": watershed_line,
+                }
+            )
+            continue
+
+        if watershed_id not in buffer_lookup:
+            continue
+
+        clip_poly = buffer_lookup[watershed_id]
+
+        clipped = watershed_line.intersection(clip_poly)
+
+        if clipped.is_empty:
+            continue
+
+        if isinstance(clipped, LineString):
+
+            if clipped.length >= min_breakline_length:
+                output_rows.append(
+                    {
+                        "gridcode": watershed_id,
+                        "geometry": clipped,
+                    }
+                )
+
+        elif isinstance(clipped, MultiLineString):
+
+            for geom in clipped.geoms:
+
+                if geom.length >= min_breakline_length:
+                    output_rows.append(
+                        {
+                            "gridcode": watershed_id,
+                            "geometry": geom,
+                        }
+                    )
+
+    out_gdf = gpd.GeoDataFrame(
+        output_rows,
+        geometry="geometry",
+        crs=watersheds_gdf.crs,
+    )
+
+    out_gdf.to_file(
+        watersheds_clipped,
+        driver="ESRI Shapefile",
+    )
+    
+
+def dissolve_breaklines(
+    watersheds_lines_clipped: str,
+):
+    gdf = gpd.read_file(watersheds_lines_clipped)
+
+    merged = unary_union(gdf.geometry)
+
+    merged = linemerge(merged)
+
+    if isinstance(merged, LineString):
+        return [merged]
+
+    elif isinstance(merged, MultiLineString):
+        return list(merged.geoms)
+
+    return []
+
+def fix_self_closing_breaklines(
+    breaklines,
+):
+    fixed = []
+
+    for line in breaklines:
+
+        if not isinstance(line, LineString):
+            continue
+
+        coords = list(line.coords)
+
+        if len(coords) < 4:
+            fixed.append(line)
+            continue
+
+        # first/last point equal
+        if coords[0] == coords[-1]:
+
+            midpoint = len(coords) // 2
+
+            first = LineString(coords[: midpoint + 1])
+            second = LineString(coords[midpoint:])
+
+            fixed.extend([first, second])
+
+        else:
+            fixed.append(line)
+
+    return fixed
+
+def write_breaklines_shapefile(
+    breaklines,
+    shapefile_path: str,
+):
+
+    rows = []
+
+    for line in breaklines:
+        rows.append(
+            {
+                "length_ft": float(line.length),
+                "geometry": line,
+            }
+        )
+
+    gdf = gpd.GeoDataFrame(
+        rows,
+        geometry="geometry",
+    )
+
+    gdf.to_file(
+        shapefile_path,
+        driver="ESRI Shapefile",
+    )
