@@ -1,0 +1,9 @@
+name: overflow_test
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - gdal=3.12
+  - numpy=1.26
+  - geopandas
+  
