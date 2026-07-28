@@ -1,0 +1,41 @@
+index,nsi_occtype,occ_desc,risk_category
+1,AGR1,Agricultural,1
+2,COM1,Retail,2
+3,COM10,Retail,2
+4,COM2,Wholesale,2
+5,COM3,Services,2
+6,COM4,Professional office,2
+7,COM5,Banking,2
+8,GOV1,General government,2
+9,IND1,Industrial,2
+10,IND2,Industrial,2
+11,IND3,Industrial,2
+12,IND4,Industrial,2
+13,IND5,Industrial,2
+14,IND6,Industrial,2
+15,RES1,Single Family Residential Structures,2
+16,RES1-1SNB,Single family residential,2
+17,RES1-1SWB,Single family residential,2
+18,RES1-2SNB,Single family residential,2
+19,RES1-2SWB,Single family residential,2
+20,RES1-3SNB,Single family residential,2
+21,RES1-3SWB,Single family residential,2
+22,RES2,Mobile Home,2
+23,RES3A,duplex,2
+24,RES3-AB,Multi-Family Housing 2-4 units,2
+25,RES3B,3-4 units,2
+26,RES3C,5-9 units,2
+27,RES3-CD,Multi-Family Housing 5-20 units,2
+28,RES3D,10-19 units,2
+29,RES3-EF,Multi-Family Housing 21-50 units,2
+30,COM7,Medical office,3
+31,COM8,Recreation,3
+32,COM9,Theater / assembly,3
+33,EDU1,School,3
+34,EDU2,"College, University",3
+35,REL1,Religious assembly,3
+36,RES4,Temporary lodging/hotel,3
+37,RES5,Institutional dormitory,3
+38,COM6,Hospital,4
+39,GOV2,Emergency response / public safety,4
+40,RES6,Nursing home / assisted living,4
