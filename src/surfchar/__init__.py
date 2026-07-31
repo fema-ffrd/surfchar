@@ -219,8 +219,8 @@ def surfchar(
             hydro_dem_path=hydro_enforced_dem,
             sink_ids=sinks_df["watershed_id"],
             output_dir=stage_storage_dir,
-            stage_step = 5,
-            # stage_step=0.25,
+            # stage_step = 5,
+            stage_step=0.25,
         )
         
         print(stage_storage_df.head())
