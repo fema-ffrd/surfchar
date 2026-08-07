@@ -4,13 +4,20 @@ from . import raster
 from . import sinks
 from surfchar.options import SurfcharOptions
 
-from osgeo import gdal
-import geopandas as gpd
+from osgeo import gdal, ogr
 import overflow
 
 import os
 import logging
 from time import time, strftime
+import pandas as pd
+
+from . import raster
+from . import sinks
+from . import utils
+from . import breaklines
+from . import watersheds
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,11 +57,11 @@ def surfchar(
     # Calculate sink depths
     sink_depths_path = os.path.join(interim_outputs_dir, "sink_depths.tif")
     logger.info(f"Calculating sink depths ({sink_depths_path})...")
-    raster.get_sink_depths(filled_path, hydro_enforced_dem, sink_depths_path)
+    sinks.get_sink_depths(filled_path, hydro_enforced_dem, sink_depths_path)
 
     # Check sink depth stats
     logger.info(f"Checking sink depth stats for {sink_depths_path}...")
-    min_sink_depth, max_sink_depth = raster.check_sink_stats(sink_depths_path)
+    min_sink_depth, max_sink_depth = sinks.check_sink_stats(sink_depths_path)
     logger.info(f"Sink depth stats - Min: {min_sink_depth}, Max: {max_sink_depth}")
     if min_sink_depth == max_sink_depth:
         error_msg = "All sink depths are the same. Check your input DEM. Don't use a filled DEM as input."
@@ -64,12 +71,11 @@ def surfchar(
     # Label sinks
     labeled_sinks_path = os.path.join(interim_outputs_dir, "labeled_sinks.tif")
     logger.info(f"Labeling sinks ({labeled_sinks_path})...")
-    num_sinks = raster.label_sinks(sink_depths_path, labeled_sinks_path)
+    num_sinks = sinks.label_sinks(sink_depths_path, labeled_sinks_path)
     logger.info(f"Number of sinks labeled: {num_sinks}")
 
     # Sink depth statistics
-    print("Getting sink depth statistics...")
-    sink_stats_df = raster.get_sink_stats(labeled_sinks_path, sink_depths_path)
+    sink_stats_df = sinks.get_sink_stats(labeled_sinks_path, sink_depths_path)
     logger.info(sink_stats_df.head())
 
     # Compute flow direction from the filled DEM
@@ -89,9 +95,9 @@ def surfchar(
         "flowacc_int32.tif",
     )
 
-    raster.remove_output(flow_accumulation_int32_path)
+    utils.remove_output(flow_accumulation_int32_path)
 
-    raster.run_cmd(
+    utils.run_cmd(
         [
             "gdal_translate",
             "-ot",
@@ -104,7 +110,7 @@ def surfchar(
 
     # Get flow accumulation statistics for each sink
     logger.info("Getting flow accumulation statistics for each sink...")
-    flow_accum_stats_df = raster.get_flowacc_stats(
+    flow_accum_stats_df = sinks.get_flowacc_stats(
         labeled_sinks_path, flow_accumulation_int32_path
     )
     logger.info(flow_accum_stats_df.head())
@@ -112,10 +118,8 @@ def surfchar(
     # Build sinks DataFrame
     logger.info("Building sinks DataFrame...")
     # Open the original hydro enforced DEM to get the geotransform and projection
-    with gdal.Open(hydro_enforced_dem) as ds:
-        gt = ds.GetGeoTransform()
-        cell_area = abs(gt[1] * gt[5])
-    sinks_df = raster.build_sinks_df(
+    cell_area = utils.get_cell_area(hydro_enforced_dem)
+    sinks_df = sinks.build_sinks_df(
         sink_stats_df, flow_accum_stats_df, cell_area, rainfall_inches=1.0
     )
     logger.info(f"{len(sinks_df)} total sinks.")
@@ -143,11 +147,11 @@ def surfchar(
     
     logger.info("Mapping filtered sinks...")
     
-    filtered_sinks_path = os.path.join(interim_outputs_dir, "sinks.tif",)
+    filtered_sinks_path = os.path.join(interim_outputs_dir, "sinks.tif")
     sinks_filtered_path = os.path.splitext(labeled_sinks_path)[0] + "_filtered.gpkg"
     selected_sinks_path = os.path.join(interim_outputs_dir,"sinks_selected.gpkg")
     
-    raster.filter_sinks_vector_and_raster(
+    sinks.filter_sinks_vector_and_raster(
         sinks_filtered_path=sinks_filtered_path,
         selected_sinks_path=selected_sinks_path,
         filtered_sinks_path=filtered_sinks_path,
@@ -157,7 +161,7 @@ def surfchar(
     
     logger.info("Finding sink outlets...")
     logger.info('Getting outlet coordinates...')
-    sinks_df["outlet_xy"] = raster.get_outlet_coords(
+    sinks_df["outlet_xy"] = watersheds.get_outlet_coords(
         labeled_sinks_path,
         flow_accumulation_int32_path,
         sinks_df,
@@ -167,7 +171,7 @@ def surfchar(
 
     logger.info(f"Writing outlet points GeoPackage ({outlets_path})...")
 
-    raster.write_outlets_gpkg(
+    watersheds.write_outlets_gpkg(
         sinks_df=sinks_df,
         gpkg_path=outlets_path,
         template_raster_path=hydro_enforced_dem,
@@ -190,7 +194,7 @@ def surfchar(
     logger.info("Mapping sink IDs to watershed IDs...")
 
     sinks_df["watershed_id"] = sinks_df["outlet_xy"].apply(
-        lambda p: raster.get_watershed_id_at_outlet(
+        lambda p: watersheds.get_watershed_id_at_outlet(
             watersheds_path=watersheds_path,
             x=p[0],
             y=p[1],
@@ -198,12 +202,10 @@ def surfchar(
     )
 
     logger.info(sinks_df[["id", "watershed_id"]].head())
-    print(sinks_df[["id", "outlet_xy"]])
     
     watersheds_filled_polygons_buffer = None
     
-    print(options.analyze_stage_storage)
-
+    
     if options.analyze_stage_storage:
         logger.info("Building stage-storage tables...")
         
@@ -219,12 +221,9 @@ def surfchar(
             hydro_dem_path=hydro_enforced_dem,
             sink_ids=sinks_df["watershed_id"],
             output_dir=stage_storage_dir,
-            # stage_step = 5,
-            stage_step=0.25,
+            stage_step = 15,
+            # stage_step=0.25,
         )
-        
-        print(stage_storage_df.head())
-        print(stage_storage_df.shape)
 
         sinks_df = raster.get_fill_elevs_from_stage_storage(
             stage_storage_df=stage_storage_df,
@@ -294,7 +293,7 @@ def surfchar(
             "watersheds_filled_polygons_buffer.shp",
         )
 
-        raster.buffer_polygons(
+        breaklines.buffer_polygons(
             input_path=watersheds_filled_polygons,
             output_path=watersheds_filled_polygons_buffer,
             distance=options.sink_buffer,
@@ -315,21 +314,54 @@ def surfchar(
     
     watersheds_lines = os.path.join(interim_outputs_dir, 'watersheds_lines.shp')
     logger.info(f'Converting watershed polygons to lines {watersheds_lines}')
-    raster.polygons_to_lines(watersheds_polygons, watersheds_lines, )
+    breaklines.polygons_to_lines(watersheds_polygons, watersheds_lines, )
 
     sinks_polygons_buffer = os.path.join(interim_outputs_dir, 'sinks_polygons_buffer.shp')
     logger.info(f'Buffering sinks by {options.sink_buffer} ft...')
-    raster.buffer_polygons(sinks_polygons, sinks_polygons_buffer, options.sink_buffer)
+    breaklines.buffer_polygons(sinks_polygons, sinks_polygons_buffer, options.sink_buffer)
     
     watersheds_lines_clipped = os.path.join(interim_outputs_dir,"watersheds_lines_clipped.shp",)
     logger.info(f"Clipping watershed lines {watersheds_lines_clipped}")
-    sinks_that_overflow = sinks_df.loc[sinks_df["overflows"]]["id"]
+    
+    #debug
+    print(sinks_df[["id", "watershed_id", "overflows"]])
+    
+    print("Overflow count:", sinks_df["overflows"].sum())
 
-    raster.clip_watersheds(
-        watersheds_lines,
-        sinks_polygons_buffer,
-        sinks_that_overflow,
-        watersheds_lines_clipped,
+    # print(sinks_df[["id", "fill_elev"]])
+    
+    # ArcPy logic:
+    # overflow status belongs to the sink, so retain sink IDs here.
+    sinks_that_overflow = sinks_df.loc[
+        sinks_df["overflows"].fillna(False).astype(bool),
+        "id",
+    ]
+
+    # The ArcPy watershed raster used sink IDs directly.
+    # The GDAL watershed raster currently has different watershed values,
+    # so preserve the relationship explicitly.
+    watershed_to_sink = {
+        int(row.watershed_id): int(row.id)
+        for row in sinks_df[["id", "watershed_id"]].itertuples(index=False)
+        if pd.notna(row.watershed_id)
+    }
+
+    logger.info(
+        "Overflow sink IDs: %s",
+        sinks_that_overflow.astype(int).tolist(),
+    )
+
+    logger.info(
+        "Watershed-to-sink mapping: %s",
+        watershed_to_sink,
+    )
+
+    breaklines.clip_watersheds(
+        watersheds=watersheds_lines,
+        sinks_buffer=sinks_polygons_buffer,
+        sinks_that_overflow=sinks_that_overflow,
+        watersheds_clipped=watersheds_lines_clipped,
+        watershed_to_sink=watershed_to_sink,
         watersheds_fill_buffer=watersheds_filled_polygons_buffer,
         clip_all=options.clip_all,
         min_breakline_length=options.min_breakline_length,
@@ -339,17 +371,25 @@ def surfchar(
 
     logger.info(f"Dissolving clipped watershed lines to get initial breakline geometry {breaklines_path}")
 
-    initial_breaklines = raster.dissolve_breaklines(watersheds_lines_clipped)
+    initial_breaklines = breaklines.dissolve_breaklines(watersheds_lines_clipped)
                                                     
     logger.info(f'Fixing self-closing breaklines...')
-    fixed_breaklines = raster.fix_self_closing_breaklines(initial_breaklines)
+    fixed_breaklines = breaklines.fix_self_closing_breaklines(initial_breaklines)
 
     logger.info(f'Writing breaklines shapefile {breaklines_path}')
-    watersheds_lines_gdf = gpd.read_file(
-        watersheds_lines_clipped
+    ds = ogr.Open(watersheds_lines_clipped)
+
+    layer = ds.GetLayer()
+
+    srs = layer.GetSpatialRef().Clone()
+
+    ds = None
+
+    breaklines.write_breaklines_shapefile(
+        fixed_breaklines,
+        breaklines_path,
+        srs=srs,
     )
-    
-    raster.write_breaklines_shapefile(fixed_breaklines, breaklines_path, crs=watersheds_lines_gdf.crs,)
 
     logger.info(f'Done. Elapsed time: {time() - start:.2f} seconds')
     
